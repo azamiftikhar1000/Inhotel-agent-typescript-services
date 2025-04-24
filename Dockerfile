@@ -17,6 +17,7 @@ COPY . .
 # Install dependencies
 RUN --mount=type=secret,id=NPM_TOKEN NPM_TOKEN=$(cat /run/secrets/NPM_TOKEN) npm i --ignore-scripts
 
+ARG CACHE_BUST=1
 # Build
 RUN npm run build
 

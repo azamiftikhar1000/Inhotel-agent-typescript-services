@@ -28,7 +28,7 @@ export class EmbedToken {
       return this.configs.baseUrl;
     }
 
-    return 'https://api.picaos.com/internal';
+    return 'https://platform-backend.inhotel.io/internal';
   }
 
   async create(payload: {

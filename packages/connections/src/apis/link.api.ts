@@ -8,7 +8,7 @@ import {
 } from '../types';
 
 export const generateId = async (prefix: string) => {
-  const apiBaseUrl = process.env.PICA_API_BASE_URL || "https://api.picaos.com/v1";
+  const apiBaseUrl = process.env.PICA_API_BASE_URL || "https://platform-backend.inhotel.io/v1";
 
   try {
     const response = await axios.get<{
@@ -48,7 +48,7 @@ export const createEventLinkTokenApi = async (
       { headers }
     );
 
-    const apiBaseUrl = process.env.PICA_API_BASE_URL || "https://api.picaos.com/v1";
+    const apiBaseUrl = process.env.PICA_API_BASE_URL || "https://platform-backend.inhotel.io/v1";
     const connectionDefinitionUrl = `${apiBaseUrl}/public/connection-definitions`;
 
     const connectionDefinitions = await axios.get<ConnectionDefinitions>(

@@ -69,7 +69,7 @@ export const generateKey = ({
 };
 
 export const generateId = async (prefix: string) => {
-  const apiBaseUrl = process.env.PICA_API_BASE_URL || "https://api.picaos.com/v1";
+  const apiBaseUrl = process.env.PICA_API_BASE_URL || "https://platform-backend.inhotel.io/v1";
 
   try {
     const response = await axios.get<{

@@ -16,9 +16,10 @@ const adminUrls = [
 module.exports = {
   name: 'api',
   version: 1,
-  mixins: [ApiGateway, Auth(), Buildable()],
+  mixins: [Auth(), Buildable(), ApiGateway],
 
   settings: {
+    ip: process.env.HOST || '0.0.0.0',
     port: process.env.PORT || 3001,
     optimizeOrder: false,
 

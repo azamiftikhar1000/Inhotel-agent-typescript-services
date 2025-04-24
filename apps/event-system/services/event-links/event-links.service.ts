@@ -41,6 +41,7 @@ export default class EventLinks extends GenericServiceProvider {
         ],
       },
     });
+    this.broker.logger.info('[event‑links] service loaded');
   }
 }
 

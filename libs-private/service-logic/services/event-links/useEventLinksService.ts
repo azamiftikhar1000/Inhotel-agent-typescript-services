@@ -177,6 +177,17 @@ export const useEventLinksService = (ctx: Context, ownership: Ownership) => {
     }: CreateOauthEmbedConnectionPayload): Promise<
       BResult<ConnectionRecord, 'service', unknown>
     > {
+      ctx.broker.logger.error('[createOauthEmbedConnection] STARTED with params:', { 
+        connectionDefinitionId, 
+        linkToken, 
+        clientId: clientId ? '[REDACTED]' : undefined,
+        hasCode: !!code,
+        redirectUri,
+        type,
+        hasFormData: !!formData,
+        hasAdditionalData: !!additionalData
+      });
+
       const linkResult = await find<EventLink>({
         query: {
           token: linkToken,
@@ -184,8 +195,10 @@ export const useEventLinksService = (ctx: Context, ownership: Ownership) => {
       });
 
       const links = linkResult.unwrap();
+      ctx.broker.logger.error('[createOauthEmbedConnection] Links found:', { count: links.length });
 
       if (links.length === 0) {
+        ctx.broker.logger.error('[createOauthEmbedConnection] ERROR: Link not found for token');
         return resultErr<'service'>(
           false,
           'service_4004',
@@ -196,8 +209,17 @@ export const useEventLinksService = (ctx: Context, ownership: Ownership) => {
       }
 
       const link = links[0];
+      ctx.broker.logger.error('[createOauthEmbedConnection] Link found:', { 
+        id: link._id,
+        expiresAt: link.expiresAt,
+        currentTime: Date.now(),
+        isExpired: link.expiresAt <= Date.now(),
+        environment: link.environment,
+        usageSource: link.usageSource
+      });
 
       if (link.expiresAt <= Date.now()) {
+        ctx.broker.logger.error('[createOauthEmbedConnection] ERROR: Link token expired');
         return resultErr<'service'>(
           false,
           'service_4000',
@@ -209,8 +231,13 @@ export const useEventLinksService = (ctx: Context, ownership: Ownership) => {
 
       const contextMetadata = ctx.meta as any;
       const headers = contextMetadata.request.headers;
+      ctx.broker.logger.error('[createOauthEmbedConnection] Headers:', { 
+        hasXPicaSecret: !!headers['x-pica-secret'],
+        headerKeys: Object.keys(headers)
+      });
 
       try {
+        ctx.broker.logger.error('[createOauthEmbedConnection] Getting access keys for ownership:', link.ownership);
         const { listAccessKeys } = useEventAccessService(ctx, link.ownership);
         const eventAccessRecords = await listAccessKeys({
           query: {
@@ -220,19 +247,55 @@ export const useEventLinksService = (ctx: Context, ownership: Ownership) => {
                 : process.env.DEFAULT_LIVE_ACCESS_KEY,
           },
         });
+        
+        ctx.broker.logger.error('[createOauthEmbedConnection] Access key query result received');
         const recordsList = matchResultAndHandleHttpError(
           eventAccessRecords,
           identity
         );
+        
+        ctx.broker.logger.error('[createOauthEmbedConnection] Access records:', { 
+          hasRecords: !!recordsList, 
+          hasRows: !!recordsList?.rows,
+          rowCount: recordsList?.rows?.length,
+          firstRowHasAccessKey: !!recordsList?.rows?.[0]?.accessKey
+        });
 
         let secret = headers['x-pica-secret'];
 
         if (!secret || secret === 'redacted') {
           secret = recordsList?.rows?.[0]?.accessKey;
+          ctx.broker.logger.error('[createOauthEmbedConnection] Using default access key');
+        } else {
+          ctx.broker.logger.error('[createOauthEmbedConnection] Using header access key');
         }
 
+        // Log the URL we're about to call
+        const apiUrl = `${CREATE_OAUTH_CONNECTION_URL}/${type}`;
+        ctx.broker.logger.error('[createOauthEmbedConnection] Making API call to:', apiUrl);
+        
+        // Prepare the data payload for logging (without sensitive values)
+        const safeDataForLogging = {
+          __isEngineeringAccount__: link?.usageSource === 'user-dashboard',
+          hasClientId: !!clientId,
+          payload: {
+            hasCode: !!code,
+            hasRedirectUri: !!redirectUri,
+            hasFormData: !!formData,
+            hasAdditionalData: !!additionalData
+          },
+          type,
+          connectionDefinitionId,
+          identity: link?.identity,
+          identityType: link?.identityType,
+          name: link?.label,
+          group: link?.group
+        };
+        
+        ctx.broker.logger.error('[createOauthEmbedConnection] HTTP request data:', safeDataForLogging);
+
         const connection = await makeHttpNetworkCall<ConnectionRecord>({
-          url: `${CREATE_OAUTH_CONNECTION_URL}/${type}`,
+          url: apiUrl,
           method: 'POST',
           headers: {
             'x-pica-secret': secret,
@@ -256,20 +319,45 @@ export const useEventLinksService = (ctx: Context, ownership: Ownership) => {
           },
         });
 
+        ctx.broker.logger.error('[createOauthEmbedConnection] API call completed, processing result');
         const result = matchResultAndHandleHttpError(connection, identity);
+        ctx.broker.logger.error('[createOauthEmbedConnection] API result processed:', { 
+          success: !!result,
+          hasData: !!result?.data
+        });
 
         await updateById(link._id, {
           expiresAt: Date.now(),
           updatedAt: Date.now(),
           type,
         });
+        ctx.broker.logger.error('[createOauthEmbedConnection] Link updated successfully');
 
         return resultOk(result.data);
       } catch (error) {
+        // Log the full error object structure to debug
+        ctx.broker.logger.error('[createOauthEmbedConnection] ERROR occurred:', error);
+        
+        // Log specific error properties that might help diagnosis
+        ctx.broker.logger.error('[createOauthEmbedConnection] ERROR details:', {
+          errorMessage: error?.message,
+          errorName: error?.name,
+          errorStack: error?.stack,
+          errorData: error?.data,
+          errorDataData: error?.data?.data,
+          errorDataDataError: error?.data?.data?.error,
+          isAxiosError: error?.isAxiosError,
+          responseStatus: error?.response?.status,
+          responseData: error?.response?.data
+        });
+
+        const errorMessage = error?.data?.data?.error || 'Invalid connection credentials';
+        ctx.broker.logger.error('[createOauthEmbedConnection] Returning error message:', errorMessage);
+        
         return resultErr<'service'>(
           false,
           'service_4000',
-          error?.data?.data?.error || 'Invalid connection credentials',
+          errorMessage,
           'buildable-core',
           false
         );
@@ -277,17 +365,23 @@ export const useEventLinksService = (ctx: Context, ownership: Ownership) => {
     },
 
     async createEmbedToken(): Promise<BResult<any, 'service', unknown>> {
+      ctx.broker.logger.error('[createEmbedToken] Starting createEmbedToken method');
       const contextMetadata = ctx.meta as any;
       const headers = contextMetadata.request.headers;
 
+      ctx.broker.logger.warn('[createEmbedToken] Starting createEmbedToken method');
+      ctx.broker.logger.warn('[createEmbedToken] ENGINEERING_ACCOUNT_BUILDABLE_ID:', process.env.ENGINEERING_ACCOUNT_BUILDABLE_ID);
+      
       // Get the settings for the engineering account
       const { get } = useSettingsService(ctx, {
         buildableId: process.env.ENGINEERING_ACCOUNT_BUILDABLE_ID,
       });
       const settingsResult = await get();
       const settings = settingsResult.unwrap();
+      ctx.broker.logger.warn('[createEmbedToken] Settings retrieved:', JSON.stringify(settings, null, 2));
 
       // Get the event access records
+      ctx.broker.logger.warn('[createEmbedToken] Getting event access records with x-pica-secret:', headers['x-pica-secret']);
       const eventAccessRecords = await makeHttpNetworkCall<EventAccessRecords>({
         url: GET_EVENT_ACCESS_RECORD_URL,
         method: 'GET',
@@ -304,6 +398,7 @@ export const useEventLinksService = (ctx: Context, ownership: Ownership) => {
         eventAccessRecords,
         identity
       );
+      ctx.broker.logger.warn('[createEmbedToken] Event access records retrieved:', JSON.stringify(records?.rows, null, 2));
 
       // Generate a link record
       const link = await generateEventLinkRecord({
@@ -325,11 +420,13 @@ export const useEventLinksService = (ctx: Context, ownership: Ownership) => {
       );
 
       const token = await createLink<EventLink>('ln', link);
+      ctx.broker.logger.warn('[createEmbedToken] Link token created');
 
       // Get the link token
       const linkToken = matchResultAndHandleHttpError(token, identity);
 
       let url = LIST_CONNECTION_DEFINITIONS_URL;
+      ctx.broker.logger.warn('[createEmbedToken] Fetching connection definitions from:', url);
 
       // Get all connection definitions
       const connectionDefinitions =
@@ -339,6 +436,7 @@ export const useEventLinksService = (ctx: Context, ownership: Ownership) => {
         });
       const { data: activeConnectionDefinitionsData } =
         matchResultAndHandleHttpError(connectionDefinitions, identity);
+      ctx.broker.logger.warn('[createEmbedToken] Connection definitions count:', activeConnectionDefinitionsData?.rows?.length);
 
       // Remove the platforms from the settings.connectedPlatforms that are not active
       const connectedPlatforms = settings?.connectedPlatforms?.filter(
@@ -351,6 +449,7 @@ export const useEventLinksService = (ctx: Context, ownership: Ownership) => {
           );
         }
       );
+      ctx.broker.logger.warn('[createEmbedToken] Connected platforms count:', connectedPlatforms?.length);
 
       // Filter the connected platforms based on the environment
       const connectedPlatformsFiltered = connectedPlatforms?.filter(
@@ -359,8 +458,10 @@ export const useEventLinksService = (ctx: Context, ownership: Ownership) => {
             ? platform?.environment === 'test'
             : platform?.environment === 'live'
       );
+      ctx.broker.logger.warn('[createEmbedToken] Filtered connected platforms count:', connectedPlatformsFiltered?.length);
 
       const sessionId = await generateId('session_id');
+      ctx.broker.logger.warn('[createEmbedToken] Generated sessionId:', sessionId);
 
       const tokenPayload = {
         linkSettings: {
@@ -374,6 +475,7 @@ export const useEventLinksService = (ctx: Context, ownership: Ownership) => {
         features: settings?.features,
         sessionId
       };
+      ctx.broker.logger.warn('[createEmbedToken] Token payload prepared');
 
       const embedToken = await generateEmbedTokensRecord(tokenPayload);
 
@@ -388,6 +490,7 @@ export const useEventLinksService = (ctx: Context, ownership: Ownership) => {
 
       const tokenResult = await createEmbedToken('embed_tk', embedToken);
       const tokenData = matchResultAndHandleHttpError(tokenResult, identity);
+      ctx.broker.logger.warn('[createEmbedToken] Embed token created successfully');
 
       return resultOk(tokenData);
     },
@@ -398,19 +501,25 @@ export const useEventLinksService = (ctx: Context, ownership: Ownership) => {
       const contextMetadata = ctx.meta as any;
       const headers = contextMetadata.request.headers;
 
+      ctx.broker.logger.warn('[createUserDashboardEmbedLinkToken] Starting method');
+      
       // Decode the JWT token
       const authorization = headers['authorization'];
       const authToken = authorization.split(' ')[1];
       const decoded = jwt.decode(authToken, { complete: true });
+      ctx.broker.logger.warn('[createUserDashboardEmbedLinkToken] JWT decoded payload:', JSON.stringify(decoded?.payload, null, 2));
 
       // Get the settings for the engineering account
+      ctx.broker.logger.warn('[createUserDashboardEmbedLinkToken] ENGINEERING_ACCOUNT_BUILDABLE_ID:', process.env.ENGINEERING_ACCOUNT_BUILDABLE_ID);
       const { get } = useSettingsService(ctx, {
         buildableId: process.env.ENGINEERING_ACCOUNT_BUILDABLE_ID,
       });
       const settingsResult = await get();
       const settings = settingsResult.unwrap();
+      ctx.broker.logger.warn('[createUserDashboardEmbedLinkToken] Settings retrieved:', JSON.stringify(settings, null, 2));
 
       // Get the event access records
+      ctx.broker.logger.warn('[createUserDashboardEmbedLinkToken] Getting event access with key in the payload:', `${decoded?.payload}`);
       const eventAccessRecords = await makeHttpNetworkCall<EventAccessRecords>({
         url: GET_EVENT_ACCESS_RECORD_URL,
         method: 'GET',
@@ -429,6 +538,7 @@ export const useEventLinksService = (ctx: Context, ownership: Ownership) => {
         eventAccessRecords,
         identity
       );
+      ctx.broker.logger.warn('[createUserDashboardEmbedLinkToken] Event access records retrieved:', JSON.stringify(records?.rows, null, 2));
 
       // Generate a link record
       const link = await generateEventLinkRecord({
@@ -437,6 +547,7 @@ export const useEventLinksService = (ctx: Context, ownership: Ownership) => {
         environment: 'test',
         usageSource: 'user-dashboard',
       });
+      ctx.broker.logger.warn('[createUserDashboardEmbedLinkToken] Link record generated');
 
       const { create: createLink } = useGenericCRUDService(
         ctx,
@@ -448,11 +559,13 @@ export const useEventLinksService = (ctx: Context, ownership: Ownership) => {
       );
 
       const token = await createLink<EventLink>('ln', link);
+      ctx.broker.logger.warn('[createUserDashboardEmbedLinkToken] Link created');
 
       // Get the link token
       const linkToken = matchResultAndHandleHttpError(token, identity);
 
       let url = LIST_CONNECTION_DEFINITIONS_URL;
+      ctx.broker.logger.warn('[createUserDashboardEmbedLinkToken] Fetching connection definitions from:', url);
 
       // Get all connection definitions
       const connectionDefinitions =
@@ -462,6 +575,7 @@ export const useEventLinksService = (ctx: Context, ownership: Ownership) => {
         });
       const { data: activeConnectionDefinitionsData } =
         matchResultAndHandleHttpError(connectionDefinitions, identity);
+      ctx.broker.logger.warn('[createUserDashboardEmbedLinkToken] Connection definitions count:', activeConnectionDefinitionsData?.rows?.length);
 
       // Remove the platforms from the settings.connectedPlatforms that are not active and also remove the platforms that have environment as live
       const connectedPlatforms = settings?.connectedPlatforms?.filter(
@@ -474,8 +588,10 @@ export const useEventLinksService = (ctx: Context, ownership: Ownership) => {
           );
         }
       );
+      ctx.broker.logger.warn('[createUserDashboardEmbedLinkToken] Filtered connected platforms count:', connectedPlatforms?.length);
 
       const sessionId = await generateId('session_id');
+      ctx.broker.logger.warn('[createUserDashboardEmbedLinkToken] Generated sessionId:', sessionId);
 
       const tokenPayload = {
         linkSettings: {
@@ -487,6 +603,7 @@ export const useEventLinksService = (ctx: Context, ownership: Ownership) => {
         features: settings?.features,
         sessionId,
       };
+      ctx.broker.logger.warn('[createUserDashboardEmbedLinkToken] Token payload prepared');
 
       const embedToken = await generateEmbedTokensRecord(tokenPayload);
 
@@ -501,6 +618,7 @@ export const useEventLinksService = (ctx: Context, ownership: Ownership) => {
 
       const tokenResult = await createEmbedToken('embed_tk', embedToken);
       const tokenData = matchResultAndHandleHttpError(tokenResult, identity);
+      ctx.broker.logger.warn('[createUserDashboardEmbedLinkToken] Embed token created successfully');
 
       return resultOk(tokenData);
     },
